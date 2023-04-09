@@ -8,6 +8,7 @@ from dagster import (
     OpExecutionContext,
     Out,
     String,
+    graph,
     job,
     op,
     usable_as_dagster_type,
@@ -50,26 +51,48 @@ def csv_helper(file_name: str) -> Iterator[Stock]:
             yield Stock.from_list(row)
 
 
-@op
-def get_s3_data_op():
+@op(config_schema={"s3_key": String}, out=Out(List[Stock], description="List of Stock objects"), description="Extract Stocks data from storage layer")
+def get_s3_data_op(context: OpExecutionContext) -> List[Stock]:
+    stocks = list(csv_helper(context.op_config["s3_key"]))
+    return stocks
+
+
+@op(
+    ins={"stocks": In(List[Stock], description="List of Stock objects")},
+    out=(Out(Aggregation, description="Single Aggregation object")),
+    description="Process Stocks"
+)
+def process_data_op(context: OpExecutionContext, stocks: List[Stock]) -> Aggregation:
+    max_stock = max(stocks, key=lambda stock: stock.high)
+    res = Aggregation(date=max_stock.date, high=max_stock.high)
+    context.log.info(res)
+    return res
+
+
+@op(ins={"agg": In(Aggregation, description="Single Aggregation object")}, out=Out(Nothing), description="Upload to caching layer")
+def put_redis_data_op(agg: Aggregation) -> Nothing:
     pass
 
 
-@op
-def process_data_op():
+@op(ins={"agg": In(Aggregation, description="Single Aggregation object")}, out=Out(Nothing), description="Upload to storage layer")
+def put_s3_data_op(agg: Aggregation) -> Nothing:
     pass
 
 
-@op
-def put_redis_data_op():
-    pass
-
-
-@op
-def put_s3_data_op():
-    pass
-
-
-@job
+@graph
 def machine_learning_job():
-    pass
+    a = process_data_op(get_s3_data_op())
+    put_redis_data_op(a)
+    put_s3_data_op(a)
+
+
+job = machine_learning_job.to_job(config={"ops": {"get_s3_data_op": {"config": {"s3_key": "week_1/data/stock.csv"}}}})
+
+
+# or if the config will be provided through UI
+#
+# @job
+# def machine_learning_job():
+#     a = process_data_op(get_s3_data_op())
+#     put_redis_data_op(a)
+#     put_s3_data_op(a)
