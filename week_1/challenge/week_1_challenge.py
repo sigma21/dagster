@@ -1,6 +1,6 @@
 import csv
 from datetime import datetime
-from heapq import nlargest
+import heapq
 from typing import Iterator, List
 
 from dagster import (
@@ -13,6 +13,7 @@ from dagster import (
     Out,
     Output,
     String,
+    graph,
     job,
     op,
     usable_as_dagster_type,
@@ -55,35 +56,89 @@ def csv_helper(file_name: str) -> Iterator[Stock]:
             yield Stock.from_list(row)
 
 
-@op
-def get_s3_data_op():
+@op(
+    config_schema={"s3_key": String},
+    out={"empty": Out(Nothing), "not_empty": Out(List[Stock], description="List of Stock objects")},
+    description="Extract Stocks data from storage layer",
+)
+def get_s3_data_op(context) -> Nothing | List[Stock]:
+    stocks = list(csv_helper(context.op_config["s3_key"]))
+
+    if not stocks:
+        yield Output(Nothing, "empty")
+    else:
+        yield Output(stocks, "not_empty")
+
+
+@op(
+    config_schema={"nlargest": int},
+    ins={"stocks": In(List[Stock], description="List of Stock objects")},
+    out=(DynamicOut(Aggregation, description="N amount of Aggregation object(s)")),
+    description="Process Stocks dynamically",
+)
+def process_data_op(context, stocks: List[Stock]) -> Aggregation:
+    nlargest = context.op_config["nlargest"]
+    top_n_stocks = heapq.nlargest(nlargest, stocks, key=lambda agg: agg.high)
+
+    for i, stock in enumerate(top_n_stocks):
+        agg = Aggregation(date=stock.date, high=stock.high)
+        context.log.info(f"Top agg #{i+1}: {agg}")
+        yield DynamicOutput(agg, mapping_key=f"Agg_{i+1}")
+
+
+@op(
+    ins={"agg": In(Aggregation, description="Single Aggregation object")},
+    out=Out(Nothing),
+    description="Upload to caching layer",
+)
+def put_redis_data_op(agg: Aggregation) -> Nothing:
     pass
 
 
-@op
-def process_data_op():
-    pass
-
-
-@op
-def put_redis_data_op():
-    pass
-
-
-@op
-def put_s3_data_op():
+@op(
+    ins={"agg": In(Aggregation, description="Single Aggregation object")},
+    out=Out(Nothing),
+    description="Upload to storage layer",
+)
+def put_s3_data_op(agg: Aggregation) -> Nothing:
     pass
 
 
 @op(
     ins={"empty_stocks": In(dagster_type=Any)},
     out=Out(Nothing),
-    description="Notifiy if stock list is empty",
+    description="Notify if stock list is empty",
 )
-def empty_stock_notify_op(context: OpExecutionContext, empty_stocks: Any):
+def empty_stock_notify_op(context: OpExecutionContext, empty_stocks: Any) -> Nothing:
     context.log.info("No stocks returned")
 
 
-@job
+@graph
 def machine_learning_dynamic_job():
-    pass
+    empty, not_empty = get_s3_data_op()
+    empty_stock_notify_op(empty)
+
+    aggs = process_data_op(not_empty)
+    aggs.map(put_redis_data_op)
+    aggs.map(put_s3_data_op)
+
+
+job = machine_learning_dynamic_job.to_job(
+    config={
+        "ops": {
+            "get_s3_data_op": {"config": {"s3_key": "week_1/data/stock.csv"}},
+            "process_data_op": {"config": {"nlargest": 3}},
+        }
+    }
+)
+# job = machine_learning_dynamic_job.to_job(config={"ops": {"get_s3_data_op": {"config": {"s3_key": "week_1/data/empty_stock.csv"}}}})
+
+
+# @job
+# def machine_learning_dynamic_job():
+#     empty, not_empty = get_s3_data_op()
+#     empty_stock_notify_op(empty)
+
+#     aggs = process_data_op(not_empty)
+#     aggs.map(put_redis_data_op)
+#     aggs.map(put_s3_data_op)

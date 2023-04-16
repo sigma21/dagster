@@ -59,7 +59,7 @@ def get_s3_data_op(context: OpExecutionContext) -> List[Stock]:
 
 @op(
     ins={"stocks": In(List[Stock], description="List of Stock objects")},
-    out=(Out(Aggregation, description="Single Aggregation object")),
+    out={"aggregation":(Out(Aggregation, description="Single Aggregation object"))},
     description="Process Stocks"
 )
 def process_data_op(context: OpExecutionContext, stocks: List[Stock]) -> Aggregation:
@@ -81,9 +81,9 @@ def put_s3_data_op(agg: Aggregation) -> Nothing:
 
 @graph
 def machine_learning_job():
-    a = process_data_op(get_s3_data_op())
-    put_redis_data_op(a)
-    put_s3_data_op(a)
+    agg = process_data_op(get_s3_data_op())
+    put_redis_data_op(agg)
+    put_s3_data_op(agg)
 
 
 job = machine_learning_job.to_job(config={"ops": {"get_s3_data_op": {"config": {"s3_key": "week_1/data/stock.csv"}}}})
