@@ -24,8 +24,7 @@ from workspaces.types import Aggregation, Stock
 )
 def get_s3_data(context:OpExecutionContext):
     s3_key = context.op_config['s3_key']
-    # stocks = list(context.resources.s3.get_data(s3_key))
-    stocks = [Stock.from_list(record) for record in context.resources.s3.get_data(s3_key)]
+    stocks = [Stock.from_list(row) for row in context.resources.s3.get_data(s3_key)]
     return stocks
 
 
@@ -48,7 +47,7 @@ def process_data(context:OpExecutionContext, stocks):
     tags={"kind": "redis"},
 )
 def put_redis_data(context:OpExecutionContext, agg):
-    context.resources.redis.put_data(name="Aggregation", value=agg)
+    context.resources.redis.put_data(name=f"Agg:{agg.date}", value=agg)
 
 
 
@@ -59,7 +58,7 @@ def put_redis_data(context:OpExecutionContext, agg):
     tags={"kind": "s3"},
 )
 def put_s3_data(context:OpExecutionContext, agg):
-    context.resources.s3.put_data("Aggregation", data=agg)
+    context.resources.s3.put_data(f"Agg:{agg.date}", data=agg)
 
 
 @graph
